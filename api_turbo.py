@@ -1,9 +1,7 @@
 import requests
 import pandas as pd
 import time
-import sys
 from pathlib import Path
-from datetime import datetime
 from io import StringIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -16,7 +14,7 @@ END_YEAR = 2024
 EU27_COUNTRIES = {
     "AT":'Austria', "BE":'Belgio', "BG":'Bulgaria', "HR":'Croazia',
     "CY":'Cipro', "CZ":'Repubblica Ceca', "DK":'Danimarca', "EE":'Estonia',
-    "FI":'Finlandia', "FR":'Francia', "DE":'Germania', "EL":'Grecia',
+    "FI":'Finlandia', "FR":'Francia', "DE":'Germania', 'GR':'Grecia', # EL does not return data for Greece (obsolete)
     "HU":'Ungheria', "IE":'Irlanda', "IT":'Italia', "LV":'Lettonia',
     "LT":'Lituania', "LU":'Lussemburgo', "MT":'Malta', "NL":'Paesi Bassi',
     "PL":'Polonia', "PT":'Portogallo', "RO":'Romania', "SK":'Slovacchia',
@@ -46,10 +44,15 @@ HS4_CHAPTER_30 = {
 
 ALL_HS4_PRODUCTS = {**HS4_CHAPTER_29, **HS4_CHAPTER_30}
 
+# Download data for 30 selected partners (~90% of imports) + aggregated extra-EU imports, used to calculate "Others"
 KEY_PARTNERS = {
-    "CN": "Cina", "IN": "India", "US": "USA", "CH": "Svizzera",
-    "KR": "Corea del Sud", "JP": "Giappone", "GB": "Regno Unito",
-    "IL": "Israele", "SG": "Singapore",
+    "CN": "Cina","IN": "India","US": "USA","CH": "Svizzera","KR": "Corea del Sud","JP": "Giappone","GB": "Regno Unito",
+    "IL": "Israele","SG": "Singapore","VN": "Vietnam","TH": "Thailandia","ID": "Indonesia","BD": "Bangladesh","MY": "Malaysia",
+    "PH": "Filippine","SA": "Arabia Saudita","AE": "Emirati Arabi Uniti","NO": "Norvegia","CA": "Canada","AU": "Australia",
+    "NZ": "Nuova Zelanda","TR": "Turchia","TW": "Taiwan","RU": "Russia","BY": "Bielorussia","BR": "Brasile",
+    "MX": "Messico","AR": "Argentina","ZA": "Sudafrica","EG": "Egitto",
+
+    "EXT_EU27_2020":'World',
 }
 
 class ComextDownloader:
@@ -64,7 +67,8 @@ class ComextDownloader:
         self.failed_queries = []
 
     def download_product_batch(self, reporter, partner_str, product_code, indicator, start_year, end_year):
-        query_filter = f"A.{reporter}.{partner_str}.{product_code}.1.{indicator}"
+        
+        query_filter = f"A.{reporter}.{partner_str}.{product_code}.1.{indicator}" # A=annual, 1=imports
         url = f"{self.API_BASE_URL}/{self.DATASET}/{query_filter}"
         params = {"startPeriod": str(start_year), "endPeriod": str(end_year), "format": "SDMX-CSV"}
         
@@ -113,6 +117,7 @@ class ComextDownloader:
         return pd.concat(all_dfs, ignore_index=True) if all_dfs else None
 
 def main():
+    start_time = time.time()
     downloader = ComextDownloader(OUTPUT_DIR)
     raw_df = downloader.download_all_data(EU27_COUNTRIES, KEY_PARTNERS, ALL_HS4_PRODUCTS, START_YEAR, END_YEAR)
     
@@ -120,10 +125,8 @@ def main():
         print("\n--- Trasformazione dati (Pivot Valore + Quantità) ---")
         
         # LOGICA PIVOT: Sposta gli indicatori da righe a colonne
-        # Identifichiamo le colonne che devono restare fisse
         index_cols = ['TIME_PERIOD', 'reporter', 'reporter_name', 'partner', 'partner_name', 'product', 'product_description']
         
-        # Creazione colonne separate per Valore e Quantità
         df_pivot = raw_df.pivot_table(
             index=index_cols, 
             columns='indicators', 
@@ -136,10 +139,12 @@ def main():
         
         final_path = OUTPUT_DIR / f"comext_FINALE_WIDE_{START_YEAR}_{END_YEAR}.csv"
         df_pivot.to_csv(final_path, index=False)
-        print(f"✔ File salvato con successo: {final_path}")
+        print(f"File salvato con successo: {final_path}")
         print(f"Esempio colonne: {df_pivot.columns.tolist()}")
     else:
         print("Nessun dato trovato.")
+    
+    print(f"\nTempo totale: {(time.time() - start_time)/60:.1f} minuti")
 
 if __name__ == "__main__":
     main()
