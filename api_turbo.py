@@ -4,17 +4,16 @@ import time
 from pathlib import Path
 from io import StringIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import sys 
-from hs8_all import HS8_CHAPTER_29, HS8_CHAPTER_30
+import sys
 
-# --- CONFIGURAZIONE ---
+# CONFIGURAZIONE
 OUTPUT_DIR = Path("./output_comext")
 OUTPUT_DIR.mkdir(exist_ok=True)
 START_YEAR = 2013
 END_YEAR = 2024
 
 # Example of final query structure updated February 2026
-# https://ec.europa.eu/eurostat/api/comext/dissemination/sdmx/2.1/data/DS-045409/A..CN+IN+US.29011000.1.VALUE_IN_EUROS+QUANTITY_IN_100KG?startPeriod=2022&endPeriod=2022&format=SDMX-CSV
+# https://ec.europa.eu/eurostat/api/comext/dissemination/sdmx/2.1/data/DS-045409/A.IT.CN+IN+US..1.VALUE_IN_EUROS+QUANTITY_IN_100KG?startPeriod=2022&endPeriod=2022&format=SDMX-CSV
 
 
 EU27_COUNTRIES = {
@@ -26,8 +25,6 @@ EU27_COUNTRIES = {
     "PL":'Polonia', "PT":'Portogallo', "RO":'Romania', "SK":'Slovacchia',
     "SI":'Slovenia', "ES":'Spagna', "SE":'Svezia'
 }
-
-ALL_HS8_PRODUCTS = {**HS8_CHAPTER_29, **HS8_CHAPTER_30}
 
 KEY_PARTNERS = {
     "CN": "Cina","IN": "India","US": "USA","CH": "Svizzera","KR": "Corea del Sud","JP": "Giappone","GB": "Regno Unito",
@@ -41,7 +38,8 @@ KEY_PARTNERS = {
 class ComextDownloader:
     API_BASE_URL = "https://ec.europa.eu/eurostat/api/comext/dissemination/sdmx/2.1/data"
     DATASET = "DS-045409"
-    INDICATORS = "VALUE_IN_EUROS+QUANTITY_IN_100KG"  # entrambi in una chiamata sola
+    # Riuniti in una stringa unica: un reporter per chiamata gestisce la dimensione
+    INDICATORS = "VALUE_IN_EUROS+QUANTITY_IN_100KG"
     
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
@@ -49,55 +47,64 @@ class ComextDownloader:
         self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
         self.failed_queries = []
 
-    def download_product_batch(self, partner_str, product_code, flow_direction, start_year, end_year):
-        # reporter = '..' (wildcard): tutti i paesi EU in una chiamata sola
-        query_filter = f"A..{partner_str}.{product_code}.{flow_direction}.{self.INDICATORS}"
+    def download_product_batch(self, reporter, partner_str, flow_direction, year):
+        # Reporter esplicito, wildcard solo su product
+        query_filter = f"A.{reporter}.{partner_str}..{flow_direction}.{self.INDICATORS}"
         url = f"{self.API_BASE_URL}/{self.DATASET}/{query_filter}"
-        params = {"startPeriod": str(start_year), "endPeriod": str(end_year), "format": "SDMX-CSV"}
+        # Anno singolo per contenere la dimensione della risposta
+        params = {"startPeriod": str(year), "endPeriod": str(year), "format": "SDMX-CSV"}
         
         try:
             response = self.session.get(url, params=params, timeout=180)
             if response.status_code == 200:
+
                 df = pd.read_csv(StringIO(response.text))
+
+                # Filtri necessari
+                df = df[df['product'].str.len() == 8] # '+' wildcard downloads HS4 and HS6 as well.
+                df = df[df['product'].astype(str).str[:2].isin(['29', '30'])]
+                df = df[df['partner'].isin(KEY_PARTNERS.keys())]
                 return df
+            
+            print(f"  HTTP {response.status_code} — {reporter} {year}")
             return None
         except Exception as e:
-            self.failed_queries.append((product_code, str(e)))
+            self.failed_queries.append((reporter, year, str(e)))
             return None
 
-    def download_all_data(self, countries, exporters, products, flow_direction, start_year, end_year):
+    def download_all_data(self, countries, exporters, flow_direction, start_year, end_year):
         all_dfs = []
         partner_str = "+".join(exporters.keys())
-        total_steps = len(products)
+        # Loop su anni x reporter: 12 x 27 = 372 chiamate totali
+        total_steps = (end_year - start_year + 1) * len(countries)
         current_step = 0
 
-        print(f"Esecuzione: {total_steps} prodotti")
-        
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        print(f"Esecuzione: {total_steps} chiamate ({end_year - start_year + 1} anni x {len(countries)} reporter)")
+
+        # futures su (reporter, year)
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
-                executor.submit(self.download_product_batch, partner_str, hs8, flow_direction, start_year, end_year): hs8
-                for hs8 in products.keys()
+                executor.submit(self.download_product_batch, reporter, partner_str, flow_direction, year): (reporter, year)
+                for year in range(start_year, end_year + 1)
+                for reporter in countries.keys()
             }
-            
+
             for future in as_completed(futures):
+                reporter, year = futures[future]
                 current_step += 1
                 res = future.result()
                 if res is not None:
                     all_dfs.append(res)
                 if current_step % 20 == 0:
-                    print(f"  Query: {current_step}/{total_steps}")
+                    print(f"  [{current_step}/{total_steps}] — {'OK' if res is not None else 'FALLITO'}")
 
         if not all_dfs:
             return None
 
         df_all = pd.concat(all_dfs, ignore_index=True)
 
-        # Filtra solo i paesi EU27 di interesse (il wildcard restituisce tutti i reporter)
-        df_all = df_all[df_all['reporter'].isin(countries.keys())]
-
         df_all["reporter_name"] = df_all["reporter"].map(EU27_COUNTRIES)
         df_all["partner_name"] = df_all["partner"].map(KEY_PARTNERS)
-        df_all["product_description"] = df_all["product"].astype(str).map(products)
 
         return df_all
 
@@ -110,11 +117,11 @@ def main():
 
     start_time = time.time()
     downloader = ComextDownloader(OUTPUT_DIR)
-    raw_df = downloader.download_all_data(EU27_COUNTRIES, KEY_PARTNERS, ALL_HS8_PRODUCTS, flow_direction, START_YEAR, END_YEAR)
+    raw_df = downloader.download_all_data(EU27_COUNTRIES, KEY_PARTNERS, flow_direction, START_YEAR, END_YEAR)
     
     if raw_df is not None:
-        
-        index_cols = ['TIME_PERIOD', 'reporter', 'reporter_name', 'partner', 'partner_name', 'product', 'product_description']
+
+        index_cols = ['TIME_PERIOD', 'reporter', 'reporter_name', 'partner', 'partner_name', 'product']
         
         df_pivot = raw_df.pivot_table(
             index=index_cols, 
@@ -126,9 +133,9 @@ def main():
         df_pivot.columns.name = None 
 
         if flow_direction == '1':
-            final_path = OUTPUT_DIR / f"comext_imports_hs8_{START_YEAR}_{END_YEAR}.csv"
+            final_path = OUTPUT_DIR / f"comext_imports_hs8_{START_YEAR}_{END_YEAR}_raw.csv"
         else:
-            final_path = OUTPUT_DIR / f"comext_exports_hs8_{START_YEAR}_{END_YEAR}.csv"
+            final_path = OUTPUT_DIR / f"comext_exports_hs8_{START_YEAR}_{END_YEAR}_raw.csv"
 
         print(f"Number of rows of final dataset: {len(df_pivot)}")
         df_pivot.to_csv(final_path, index=False)
