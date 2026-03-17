@@ -8,14 +8,14 @@ COUNTRIES = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'GR', 'ES', 'FI',
              'PT', 'RO', 'SE', 'SI', 'SK']
 
 YEAR_START = 2013
-YEAR_END = 2024
+YEAR_END = 2025
 DATASET = 'DS-059358'
 INDICATORS = ['PRODVAL', 'PRODQNT']
 
 
 def extract_prodcom():
     """
-    Scarica PRODVAL (valore) e PRODQNT (quantità) per tutti i codici PRODCOM disponibili per ciascun paese, anni 2013-2024.
+    Scarica PRODVAL (valore) e PRODQNT (quantità) per tutti i codici PRODCOM disponibili per ciascun paese, anni 2013-2025.
     Usa '..' (wildcard) per i codici prodotto: nessuna lista esterna necessaria.
     """
     risultati_raw = []
@@ -34,7 +34,7 @@ def extract_prodcom():
         )
 
         try:
-            r = requests.get(url, timeout=120)  # timeout alto: risposta grande
+            r = requests.get(url, timeout=240)  # timeout alto: risposta grande
 
             if r.status_code != 200:
                 print(f"    HTTP {r.status_code} — saltato")

@@ -4,23 +4,23 @@ library(readr)
 library(tidyr)
 library(stringr)
 
-# CONFIG: paths in brackets to use this file for the export dataset
+# CONFIG: paths in brackets to use this file for the import dataset
 
-INPUT_FILE  <- "/home/mf/eurostat/files/output_comext/comext_imports_hs8_2013_2024_raw.csv"
-#INPUT_FILE  <- "/home/mf/eurostat/files/output_comext/comext_exports_hs8_2013_2024_raw.csv"
+#INPUT_FILE  <- "/home/mf/eurostat/files/output_comext/comext_imports_hs8_2013_2025_raw.csv"
+INPUT_FILE  <- "/home/mf/eurostat/files/output_comext/comext_exports_hs8_2013_2025_raw.csv"
 INPUT_SEP   <- ","
 YEAR_BEGIN  <- 2013
-YEAR_END    <- 2024
+YEAR_END    <- 2025
 
 CBS_2025    <- "/home/mf/eurostat/files/input_data/CBS_2025_concordance.csv"
-OUT_MAPPED   <- "/home/mf/eurostat/files/output_comext/R_imp_mapped_cn8topc8_2013to2024.csv"
-OUT_UNMAPPED <- "/home/mf/eurostat/files/output_comext/R_imp_unmapped_cn8.csv"
-OUT_FLAGS    <- "/home/mf/eurostat/files/output_comext/R_imp_csb25_flags.csv"
-#OUT_MAPPED   <- "/home/mf/eurostat/files/output_comext/R_imp_mapped_cn8topc8_2013to2024.csv"
-#OUT_UNMAPPED <- "/home/mf/eurostat/files/output_comext/R_imp_unmapped_cn8.csv"
-#OUT_FLAGS    <- "/home/mf/eurostat/files/output_comext/R_imp_csb25_flags.csv"
+#OUT_MAPPED   <- "/home/mf/eurostat/files/output_comext/R_imp_mapped_cn8topc8_2013to2025.csv"
+#OUT_UNMAPPED <- "/home/mf/eurostat/files/output_comext/debug/R_imp_unmapped_cn8_.csv"
+#OUT_FLAGS    <- "/home/mf/eurostat/files/output_comext/debug/R_imp_csb25_flags_.csv"
+OUT_MAPPED   <- "/home/mf/eurostat/files/output_comext/R_exp_mapped_cn8topc8_2013to2025.csv"
+OUT_UNMAPPED <- "/home/mf/eurostat/files/output_comext/debug/R_exp_unmapped_cn8_.csv"
+OUT_FLAGS    <- "/home/mf/eurostat/files/output_comext/debug/R_exp_csb25_flags_.csv"
 
-cbs_unmapped_109 <- c(
+cbs_unmapped_109 <- c( # missing codes in CBS 2025 conversion table
   "30021091","30029050","29299000","29399900","30021010","30021098","30029090",
   "29269095","29031980","29242998","29309099","29319090","29350090","30022000",
   "29039990","29049095","29146990","29171990","29209050","29209085","29221390",
@@ -39,16 +39,14 @@ cbs_unmapped_109 <- c(
   "29313700","30022090","30022010","29314990"
 )
 
-# ============================================================================
 # CONCORDANZA HARMONIZER (2013–2021)
-# ============================================================================
 data_dir <- get_data_directory()
 pc8_dir  <- file.path(data_dir, "PC8")
 
 concordance_all <- bind_rows(lapply(seq(YEAR_BEGIN, YEAR_END), function(yr) {
   fname <- file.path(pc8_dir, paste0("PC8_CN8_", yr, ".rds"))
   if (!file.exists(fname)) {
-    message("⚠️  Concordanza MANCANTE per anno ", yr, " – saltato.")
+    message("Concordanza MANCANTE per anno ", yr, " - saltato.")
     return(NULL)
   }
   readRDS(fname) %>%
@@ -70,9 +68,7 @@ concordance_harmonizer <- concordance_all %>%
   ) %>%
   mutate(mapping_source = "harmonizer")
 
-# ============================================================================
 # CONCORDANZA CBS 2025
-# ============================================================================
 cat("Caricamento CBS 2025...\n")
 
 cbs_2025 <- read_delim(CBS_2025, delim = ",", col_types = cols(.default = col_character()),
@@ -96,10 +92,9 @@ cbs_2025 <- read_delim(CBS_2025, delim = ",", col_types = cols(.default = col_ch
   mutate(mapping_source = "CBS_2025")
 
 cat("CN8 unici in CBS 2025:", nrow(cbs_2025), "\n\n")
+# CONCORDANZA HARMONIZER (2013–2021)
 
-# ============================================================================
 # MERGE: harmonizer priorità, CBS 2025 colma lacune
-# ============================================================================
 concordance_summary <- bind_rows(
   concordance_harmonizer,
   cbs_2025 %>% filter(!CN8 %in% concordance_harmonizer$CN8)
@@ -107,9 +102,7 @@ concordance_summary <- bind_rows(
 
 cat("CN8 totali in concordanza combinata:", nrow(concordance_summary), "\n\n")
 
-# ============================================================================
 # DATI INPUT + FILTRO CN8 CHE FINISCONO CON 'XX'
-# ============================================================================
 raw_data <- read_delim(INPUT_FILE, delim = INPUT_SEP,
                        col_types = cols(.default = col_character()),
                        show_col_types = FALSE) %>%
@@ -132,9 +125,7 @@ cat("CN8 unici dopo filtro XX:", n_distinct(raw_data$CN8), "\n\n")
 
 unique_cn8 <- distinct(raw_data, CN8)
 
-# ============================================================================
 # MAPPING DIRETTO
-# ============================================================================
 mapped <- unique_cn8 %>%
   left_join(concordance_summary, by = "CN8") %>%
   mutate(
@@ -147,9 +138,7 @@ unmapped_codes <- mapped %>% filter(is.na(PC8)) %>% pull(CN8)
 cat("Mappati direttamente:", sum(!is.na(mapped$PC8)), "\n")
 cat("Non mappati:         ", length(unmapped_codes), "\n\n")
 
-# ============================================================================
 # FALLBACK: successori
-# ============================================================================
 if (length(unmapped_codes) > 0) {
   cat("Esecuzione harmonize_cn8()...\n")
   harm <- tryCatch(
@@ -195,9 +184,7 @@ if (length(unmapped_codes) > 0) {
   }
 }
 
-# ============================================================================
 # RISULTATO FINALE
-# ============================================================================
 result <- raw_data %>%
   left_join(mapped, by = "CN8") %>%
   mutate(

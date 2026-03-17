@@ -2,3 +2,8 @@ input_data/hs29_explained.pdf
 input_data/hs30_explained.pdf
 __pycache__
 input_data/mapping_cpa_hs.tsv
+output_comext/debug
+output_comext/2013_2024
+output_comext/R_exp_mapped_cn8topc8_2013to2025.csv
+output_comext/R_imp_mapped_cn8topc8_2013to2025.csv
+graphs/cn8_vs_hs4_totals_by_hs4group.png

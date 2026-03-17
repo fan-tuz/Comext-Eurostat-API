@@ -10,10 +10,10 @@ import sys
 OUTPUT_DIR = Path("./output_comext")
 OUTPUT_DIR.mkdir(exist_ok=True)
 START_YEAR = 2013
-END_YEAR = 2024
+END_YEAR = 2025
 
 # Example of final query structure updated February 2026
-# https://ec.europa.eu/eurostat/api/comext/dissemination/sdmx/2.1/data/DS-045409/A.IT.CN+IN+US..1.VALUE_IN_EUROS+QUANTITY_IN_100KG?startPeriod=2022&endPeriod=2022&format=SDMX-CSV
+# https://ec.europa.eu/eurostat/api/comext/dissemination/sdmx/2.1/data/DS-045409/A.IT.CN+IN+US..1.QUANTITY_IN_100KG?startPeriod=2022&endPeriod=2022&format=SDMX-CSV
 
 
 EU27_COUNTRIES = {
@@ -31,7 +31,7 @@ KEY_PARTNERS = {
     "IL": "Israele","SG": "Singapore","VN": "Vietnam","TH": "Thailandia","ID": "Indonesia","BD": "Bangladesh","MY": "Malaysia",
     "PH": "Filippine","SA": "Arabia Saudita","AE": "Emirati Arabi Uniti","NO": "Norvegia","CA": "Canada","AU": "Australia",
     "NZ": "Nuova Zelanda","TR": "Turchia","TW": "Taiwan","RU": "Russia","BY": "Bielorussia","BR": "Brasile",
-    "MX": "Messico","AR": "Argentina","ZA": "Sudafrica","EG": "Egitto",
+    "MX": "Messico","AR": "Argentina","ZA": "Sudafrica","EG": "Egitto","MA": 'Marocco',
     "EXT_EU27_2020":'World',
 }
 
@@ -39,7 +39,7 @@ class ComextDownloader:
     API_BASE_URL = "https://ec.europa.eu/eurostat/api/comext/dissemination/sdmx/2.1/data"
     DATASET = "DS-045409"
     # Riuniti in una stringa unica: un reporter per chiamata gestisce la dimensione
-    INDICATORS = "VALUE_IN_EUROS+QUANTITY_IN_100KG"
+    INDICATORS = ["VALUE_IN_EUROS", "QUANTITY_IN_100KG"]
     
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
@@ -47,9 +47,9 @@ class ComextDownloader:
         self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
         self.failed_queries = []
 
-    def download_product_batch(self, reporter, partner_str, flow_direction, year):
-        # Reporter esplicito, wildcard solo su product
-        query_filter = f"A.{reporter}.{partner_str}..{flow_direction}.{self.INDICATORS}"
+    def download_product_batch(self, reporter, partner_str, flow_direction, indicator, year):
+
+        query_filter = f"A.{reporter}.{partner_str}..{flow_direction}.{indicator}"
         url = f"{self.API_BASE_URL}/{self.DATASET}/{query_filter}"
         # Anno singolo per contenere la dimensione della risposta
         params = {"startPeriod": str(year), "endPeriod": str(year), "format": "SDMX-CSV"}
@@ -75,22 +75,23 @@ class ComextDownloader:
     def download_all_data(self, countries, exporters, flow_direction, start_year, end_year):
         all_dfs = []
         partner_str = "+".join(exporters.keys())
-        # Loop su anni x reporter: 12 x 27 = 372 chiamate totali
-        total_steps = (end_year - start_year + 1) * len(countries)
+        # Loop su anni x reporter x indicator
+        total_steps = (end_year - start_year + 1) * len(countries) * len(self.INDICATORS)
         current_step = 0
 
-        print(f"Esecuzione: {total_steps} chiamate ({end_year - start_year + 1} anni x {len(countries)} reporter)")
+        print(f"Esecuzione: {total_steps} chiamate ({end_year - start_year + 1} anni x {len(countries)} reporter x {len(self.INDICATORS)} indicatori)")
 
-        # futures su (reporter, year)
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        # futures su (reporter, indicator, year)
+        with ThreadPoolExecutor(max_workers=2) as executor:
             futures = {
-                executor.submit(self.download_product_batch, reporter, partner_str, flow_direction, year): (reporter, year)
+                executor.submit(self.download_product_batch, reporter, partner_str, flow_direction, indicator, year): (reporter, indicator, year)
                 for year in range(start_year, end_year + 1)
                 for reporter in countries.keys()
+                for indicator in self.INDICATORS
             }
 
             for future in as_completed(futures):
-                reporter, year = futures[future]
+                reporter, indicator, year = futures[future]
                 current_step += 1
                 res = future.result()
                 if res is not None:
